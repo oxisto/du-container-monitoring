@@ -25,21 +25,15 @@ end
 
 local renderScript = [[
 local json = require('dkjson')
-local data = json.decode(getInput()) or {}
+local data = json.decode(getInput()) or {items_vol = 0, max_vol = 0, request_time = 30, items = {}}
 local vmode = ]] .. tostring(verticalMode) .. [[
 
 local vmode_side = "]] .. verticalModeBottomSide .. [["
-if items == nil or data[1] then items = {} end
-if page == nil or data[1] then page = 1 end
-if sorting == nil or data[1] then sorting = ]] .. sorting .. [[ end
+local items = data.items
+if page == nil then page = 1 end
+if sorting == nil then sorting = ]] .. sorting .. [[ end
 
 local images = {}
-
-if data[5] ~= nil then
-    items[data[5][1] ] = data[5]
-    setOutput(data[5][1])
-    data[5] = nil
-end
 
 local rx,ry = getResolution()
 local cx, cy = getCursor()
@@ -117,8 +111,8 @@ local percent_fill = 0
 local r = 110/255
 local g = 166/255
 local b = 181/255
-if data[2] > 0 then
-    percent_fill = data[3]*100/data[2]
+if data.items_vol > 0 then
+    percent_fill = data.items_vol*100/data.max_vol
     if percent_fill > 100 then percent_fill = 100 end
     r,g,b = getRGBGradient(percent_fill/100,177/255,42/255,42/255,249/255,212/255,123/255,34/255,177/255,76/255)
 end
@@ -139,10 +133,10 @@ function renderFooter()
     addLine(back,0,y+h+12,rx,y+h+12)
     addBox(front,0,y+12,rx,h)
     setNextTextAlign(front, AlignH_Right, AlignV_Bottom)
-    addText(front,small,"Next query possible in " .. round(data[4]) .. ' seconds',rx-from_side,y+h+2)
+    addText(front,small,"Next query possible in " .. round(data.request_time) .. ' seconds',rx-from_side,y+h+2)
 end
 function renderProgressBar(percent)
-    if data[2] > 0 then
+    if data.items_vol > 0 then
         addText(colorLayer, itemName, format_number(round(percent*100)/100) .."%", rx/2, 90)
         local w=(rx-2-from_side*2)*(percent)/100
         local x=from_side
@@ -151,7 +145,7 @@ function renderProgressBar(percent)
         addBox(storageBar,x,y,rx-from_side*2,h)
         addBox(colorLayer,x+1,y+1,w,h-2)
     else
-        addText(colorLayer, itemName, format_number(round(data[3]*100)/100) .." L", rx/2, 80)
+        addText(colorLayer, itemName, format_number(round(data.max_vol*100)/100) .." L", rx/2, 80)
     end
 end
 function renderResistanceBar(item_id, title, quantity, x, y, w, h, withTitle, withIcon)
@@ -216,7 +210,7 @@ function renderResistanceBar(item_id, title, quantity, x, y, w, h, withTitle, wi
 
     setNextTextAlign(storageBar, AlignH_Left, AlignV_Middle)
     addText(storageBar, itemName, title, x+20+font_size, pos_y)
-
+    
     setNextTextAlign(storageBar, AlignH_Right, AlignV_Middle)
     addText(storageBar, itemName, format_number(quantity), rx-from_side-10, pos_y)
 end
@@ -251,14 +245,14 @@ end
 
 local loadedImages = 0
 for _,item in ipairs(item_to_display) do
-    if images[item[2] ] == nil and loadedImages <= 15 then
+    if images[item.id] == nil and loadedImages <= 15 then
         loadedImages = loadedImages + 1
-        images[item[2] ] = loadImage(item[5])
+        images[item.id] = loadImage(item.icon_path)
     end
 end
 
 for i,item in ipairs(item_to_display) do
-    renderResistanceBar(item[2], item[3], item[4], from_side, start_h, rx-from_side*2, h, i==1, i<=16)
+    renderResistanceBar(item.id, item.name, item.quantity, from_side, start_h, rx-from_side*2, h, i==1, i<=16)
     start_h = start_h+h+5
     if i >= byPage then
         break
@@ -333,72 +327,9 @@ else
     system.print('Storage connected')
 end
 
-screen_data={0,0,0,{}}
+
 request_time = 0
 items = {}
 update_screen = false
 
---[[
-    DU-Nested-Coroutines by Jericho
-    Permit to easier avoid CPU Load Errors
-    Source available here: https://github.com/Jericho1060/du-nested-coroutines
-]]--
-
-coroutinesTable  = {}
---all functions here will become a coroutine
-MyCoroutines = {
-    function()
-        request_time = math.ceil(container.updateContent())
-        local max_vol = container.getMaxVolume()
-        if max_vol == 0 then
-            max_vol = maxVolumeForHub
-        end
-        local screen_data = {update_screen, max_vol, container.getItemsVolume(), request_time, nil}
-        if update_screen then
-            for i,item in ipairs(items) do
-                screen_data[5] = {
-                    i,
-                    item[1],
-                    item[2],
-                    item[3],
-                    item[4]
-                }
-                for _,s in pairs(screens) do
-                    s.setScriptInput(json.encode(screen_data))
-                    while tonumber(s.getScriptOutput()) ~= i do
-                        coroutine.yield(coroutinesTable[1])
-                    end
-                end
-                update_screen = false
-                screen_data[1] = false
-            end
-            unit.exit()
-        else
-            for _,s in pairs(screens) do
-                s.setScriptInput(json.encode(screen_data))
-            end
-        end
-    end,
-}
-
-function initCoroutines()
-    for _,f in pairs(MyCoroutines) do
-        local co = coroutine.create(f)
-        table.insert(coroutinesTable, co)
-    end
-end
-
-initCoroutines()
-
-runCoroutines = function()
-    for i,co in ipairs(coroutinesTable) do
-        if coroutine.status(co) == "dead" then
-            coroutinesTable[i] = coroutine.create(MyCoroutines[i])
-        end
-        if coroutine.status(co) == "suspended" then
-            assert(coroutine.resume(co))
-        end
-    end
-end
-
-MainCoroutine = coroutine.create(runCoroutines)
+unit.setTimer("update", 1)
